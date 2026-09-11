@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Correção</title>
+</head>
+<body style="margin:0;">
+<div id="app" style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 12px; background:#f4f6f8; min-height:100vh; box-sizing:border-box;">
+  <h2 style="color:#1F4E78; margin:4px 0 2px 0; font-size:20px;">Correção</h2>
+  <p style="color:#666; font-size:12px; margin:0 0 14px 0;">Devolução de livro incompleto — controle de retorno para refazer o serviço</p>
+
+  <div style="background:white; border-radius:10px; padding:14px; box-shadow:0 1px 3px rgba(0,0,0,0.1); margin-bottom:16px;">
+    <h3 style="margin:0 0 10px 0; font-size:15px; color:#1F4E78;">Novo Lançamento</h3>
+    <label style="font-size:12px; color:#555; display:block; margin-bottom:4px;">Endereço</label>
+    <input id="inpEndereco" type="text" placeholder="Rua, número, bairro" style="width:100%; box-sizing:border-box; padding:10px; border:1px solid #ccc; border-radius:6px; margin-bottom:10px; font-size:14px;">
+
+    <label style="font-size:12px; color:#555; display:block; margin-bottom:4px;">Número do Medidor</label>
+    <input id="inpMedidor" type="text" placeholder="Ex: 123456" style="width:100%; box-sizing:border-box; padding:10px; border:1px solid #ccc; border-radius:6px; margin-bottom:10px; font-size:14px;">
+
+    <label style="font-size:12px; color:#555; display:block; margin-bottom:4px;">Código da UC</label>
+    <input id="inpUC" type="text" placeholder="Ex: 7891234" style="width:100%; box-sizing:border-box; padding:10px; border:1px solid #ccc; border-radius:6px; margin-bottom:10px; font-size:14px;">
+
+    <label style="font-size:12px; color:#555; display:block; margin-bottom:4px;">Leitura Efetuada</label>
+    <input id="inpLeitura" type="text" inputmode="numeric" placeholder="Ex: 045678" style="width:100%; box-sizing:border-box; padding:10px; border:1px solid #ccc; border-radius:6px; margin-bottom:10px; font-size:14px;">
+
+    <label style="font-size:12px; color:#555; display:block; margin-bottom:4px;">Data do Lançamento (999)</label>
+    <input id="inpData" type="date" style="width:100%; box-sizing:border-box; padding:10px; border:1px solid #ccc; border-radius:6px; margin-bottom:12px; font-size:14px;">
+
+    <label style="font-size:12px; color:#555; display:block; margin-bottom:4px;">Foto</label>
+    <input id="inpFoto" type="file" accept="image/*" capture="environment" style="width:100%; box-sizing:border-box; margin-bottom:8px; font-size:13px;">
+    <div id="fotoPreview" style="margin-bottom:12px;"></div>
+
+    <button id="btnAdd" style="width:100%; padding:12px; background:#1F4E78; color:white; border:none; border-radius:6px; font-size:15px; font-weight:bold;">+ Adicionar</button>
+    <div id="formMsg" style="color:#c00000; font-size:12px; margin-top:6px;"></div>
+  </div>
+
+  <div id="list"></div>
+  <div id="loadingMsg" style="text-align:center; color:#999; font-size:13px; padding:20px;">Carregando...</div>
+
+  <div style="text-align:center; color:#aaa; font-size:11px; margin-top:20px; padding-top:12px; border-top:1px solid #e0e0e0;">Criado por Luís Ricardo</div>
+</div>
+
+<script>
+(function() {
+  const STORAGE_KEY = 'casos999';
+  const PRAZO_DIAS_PADRAO = 3;
+  let casos = [];
+
+  const $ = (id) => document.getElementById(id);
+  let fotoBase64 = null;
+
+  function storageGet(key){
+    return localStorage.getItem(key);
+  }
+  function storageSet(key, value){
+    localStorage.setItem(key, value);
+  }
+
+  function lerFotoComoBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  $('inpFoto').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) { fotoBase64 = null; $('fotoPreview').innerHTML = ''; return; }
+    fotoBase64 = await lerFotoComoBase64(file);
+    $('fotoPreview').innerHTML = `<img src="${fotoBase64}" style="width:70px; height:70px; object-fit:cover; border-radius:6px; border:1px solid #ccc;">`;
+  });
+
+  function todayStr() {
+    const d = new Date();
+    return d.toISOString().slice(0,10);
+  }
+
+  function addDays(dateStr, days) {
+    const d = new Date(dateStr + 'T00:00:00');
+    d.setDate(d.getDate() + Number(days));
+    return d.toISOString().slice(0,10);
+  }
+
+  function fmtDate(dateStr) {
+    const [y,m,d] = dateStr.split('-');
+    return `${d}/${m}/${y}`;
+  }
+
+  function getStatus(caso) {
+    if (caso.retornado) return 'retornado';
+    const prazoData = addDays(caso.dataLancamento, caso.prazoDias);
+    if (todayStr() > prazoData) return 'atrasado';
+    return 'aguardando';
+  }
+
+  function diasRestantes(caso) {
+    const prazoData = addDays(caso.dataLancamento, caso.prazoDias);
+    const diff = Math.round((new Date(prazoData) - new Date(todayStr())) / 86400000);
+    return diff;
+  }
+
+  function loadCasos() {
+    try {
+      const value = storageGet(STORAGE_KEY);
+      casos = value ? JSON.parse(value) : [];
+    } catch (e) {
+      casos = [];
+    }
+    $('loadingMsg').style.display = 'none';
+    render();
+  }
+
+  function saveCasos() {
+    try {
+      storageSet(STORAGE_KEY, JSON.stringify(casos));
+    } catch (e) {
+      console.error('Erro ao salvar', e);
+    }
+  }
+
+  function render() {
+    renderList();
+  }
+
+  function renderList() {
+    let filtered = casos.slice();
+
+    // ordena: atrasados primeiro, depois aguardando por prazo mais próximo, depois retornados
+    const order = { atrasado: 0, aguardando: 1, retornado: 2 };
+    filtered.sort((a,b) => {
+      const oa = order[getStatus(a)], ob = order[getStatus(b)];
+      if (oa !== ob) return oa - ob;
+      return new Date(a.dataLancamento) - new Date(b.dataLancamento);
+    });
+
+    if (filtered.length === 0) {
+      $('list').innerHTML = '<div style="text-align:center; color:#999; padding:24px; font-size:13px;">Nenhum lançamento ainda.</div>';
+      return;
+    }
+
+    $('list').innerHTML = filtered.map(c => {
+      const status = getStatus(c);
+      const prazoData = addDays(c.dataLancamento, c.prazoDias);
+      let badgeColor, badgeBg, badgeText;
+      if (status === 'atrasado') {
+        badgeColor = '#C00000'; badgeBg = '#F8CBAD'; badgeText = 'ATRASADO - REFAZER';
+      } else if (status === 'retornado') {
+        badgeColor = '#375623'; badgeBg = '#C6E0B4'; badgeText = 'Retornado';
+      } else {
+        const dias = diasRestantes(c);
+        badgeColor = '#7f6000'; badgeBg = '#FFE699';
+        badgeText = dias === 0 ? 'Vence hoje' : `Aguardando (${dias}d)`;
+      }
+
+      return `
+        <div style="background:white; border-radius:10px; padding:12px; margin-bottom:8px; box-shadow:0 1px 3px rgba(0,0,0,0.08); border-left:4px solid ${badgeColor};">
+          <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
+            <div style="flex:1;">
+              <div style="font-weight:bold; font-size:14px; color:#222;">${escapeHtml(c.endereco)}</div>
+              <div style="font-size:12px; color:#666; margin-top:2px;">Medidor: ${escapeHtml(c.medidor)} · UC: ${escapeHtml(c.uc || '-')}</div>
+              <div style="font-size:12px; color:#666;">Leitura efetuada: ${escapeHtml(c.leitura || '-')}</div>
+              <div style="font-size:12px; color:#666;">Lançado: ${fmtDate(c.dataLancamento)} · Prazo: ${fmtDate(prazoData)}</div>
+              ${c.foto ? `<img src="${c.foto}" class="fotoThumb" data-id="${c.id}" style="width:56px; height:56px; object-fit:cover; border-radius:6px; margin-top:6px; border:1px solid #ddd; cursor:pointer;">` : ''}
+            </div>
+            <span style="background:${badgeBg}; color:${badgeColor}; font-size:10px; font-weight:bold; padding:4px 8px; border-radius:12px; white-space:nowrap;">${badgeText}</span>
+          </div>
+          ${status === 'aguardando' ? `
+          <div style="display:flex; gap:6px; margin-top:10px;">
+            <input type="text" inputmode="numeric" class="inpLeituraEdit" data-id="${c.id}" placeholder="Leitura efetuada" value="${escapeHtml(c.leitura || '')}" style="flex:1; box-sizing:border-box; padding:8px; border:1px solid #ccc; border-radius:6px; font-size:13px;">
+            <button class="btnSalvarLeitura" data-id="${c.id}" style="padding:8px 12px; background:#1F4E78; color:white; border:none; border-radius:6px; font-size:12px;">Salvar</button>
+          </div>
+          <div style="margin-top:8px;">
+            <input type="file" accept="image/*" capture="environment" class="inpFotoEdit" data-id="${c.id}" style="width:100%; box-sizing:border-box; font-size:12px;">
+          </div>
+          ` : ''}
+          <div style="display:flex; gap:6px; margin-top:10px;">
+            ${status !== 'retornado' ? `<button class="btnRetornado" data-id="${c.id}" style="flex:1; padding:8px; background:#375623; color:white; border:none; border-radius:6px; font-size:12px;">Marcar retornado</button>` : `<button class="btnDesfazer" data-id="${c.id}" style="flex:1; padding:8px; background:#eee; color:#555; border:none; border-radius:6px; font-size:12px;">Desfazer</button>`}
+            <button class="btnDel" data-id="${c.id}" style="padding:8px 12px; background:#fff; color:#C00000; border:1px solid #C00000; border-radius:6px; font-size:12px;">Excluir</button>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    document.querySelectorAll('.btnRetornado').forEach(btn => {
+      btn.onclick = () => marcarRetornado(btn.dataset.id, true);
+    });
+    document.querySelectorAll('.btnDesfazer').forEach(btn => {
+      btn.onclick = () => marcarRetornado(btn.dataset.id, false);
+    });
+    document.querySelectorAll('.btnDel').forEach(btn => {
+      btn.onclick = () => excluirCaso(btn.dataset.id);
+    });
+    document.querySelectorAll('.btnSalvarLeitura').forEach(btn => {
+      btn.onclick = () => salvarLeitura(btn.dataset.id);
+    });
+    document.querySelectorAll('.inpFotoEdit').forEach(inp => {
+      inp.onchange = () => salvarFoto(inp.dataset.id, inp.files[0]);
+    });
+    document.querySelectorAll('.fotoThumb').forEach(img => {
+      img.onclick = () => window.open(img.src, '_blank');
+    });
+  }
+
+  async function salvarFoto(id, file) {
+    if (!file) return;
+    const caso = casos.find(c => c.id === id);
+    if (caso) {
+      caso.foto = await lerFotoComoBase64(file);
+      saveCasos();
+      render();
+    }
+  }
+
+  function salvarLeitura(id) {
+    const input = document.querySelector(`.inpLeituraEdit[data-id="${id}"]`);
+    const caso = casos.find(c => c.id === id);
+    if (caso && input) {
+      caso.leitura = input.value.trim();
+      saveCasos();
+      render();
+    }
+  }
+
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str || '';
+    return div.innerHTML;
+  }
+
+  function marcarRetornado(id, valor) {
+    const caso = casos.find(c => c.id === id);
+    if (caso) {
+      caso.retornado = valor;
+      caso.dataRetorno = valor ? todayStr() : null;
+      saveCasos();
+      render();
+    }
+  }
+
+  function excluirCaso(id) {
+    casos = casos.filter(c => c.id !== id);
+    saveCasos();
+    render();
+  }
+
+  $('btnAdd').onclick = async () => {
+    const endereco = $('inpEndereco').value.trim();
+    const medidor = $('inpMedidor').value.trim();
+    const uc = $('inpUC').value.trim();
+    const leitura = $('inpLeitura').value.trim();
+    const dataLancamento = $('inpData').value;
+
+    if (!endereco || !medidor || !dataLancamento) {
+      $('formMsg').textContent = 'Preencha endereço, medidor e data do lançamento.';
+      return;
+    }
+    $('formMsg').textContent = '';
+
+    casos.push({
+      id: Date.now().toString(36) + Math.random().toString(36).slice(2,6),
+      endereco, medidor, uc, leitura, dataLancamento,
+      prazoDias: PRAZO_DIAS_PADRAO,
+      foto: fotoBase64,
+      retornado: false,
+      dataRetorno: null
+    });
+
+    saveCasos();
+    $('inpEndereco').value = '';
+    $('inpMedidor').value = '';
+    $('inpUC').value = '';
+    $('inpLeitura').value = '';
+    $('inpData').value = '';
+    $('inpFoto').value = '';
+    fotoBase64 = null;
+    $('fotoPreview').innerHTML = '';
+    render();
+  };
+
+  $('inpData').value = todayStr();
+  loadCasos();
+})();
+</script>
+</body>
+</html>
